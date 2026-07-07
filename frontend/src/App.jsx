@@ -40,6 +40,7 @@ async function collectFilesFromDir(dirHandle, prefix = "") {
   return results;
 }
 
+// ── Small reusable components ───────────────────────────────────────────────
 function Tag({ label, color = "#7dd3fc" }) {
   return (
     <span style={{ ...S.tag, color, borderColor: color + "44" }}>
@@ -58,6 +59,34 @@ function ProgressBar({ done, total }) {
   );
 }
 
+// ── NEW: Collapsible readonly value component ───────────────────────────────
+function CollapsibleReadonly({ value }) {
+  const [expanded, setExpanded] = useState(false);
+  const isLong = value && value.length > 100;
+  
+  return (
+    <div style={S.readonlyWrap}>
+      <div style={{
+        ...S.readonly,
+        maxHeight: expanded ? "none" : "3.6em", // ~2-3 lines
+        overflow: expanded ? "visible" : "hidden",
+      }}>
+        {value}
+      </div>
+      {isLong && (
+        <button
+          style={S.expandBtn}
+          onClick={() => setExpanded(!expanded)}
+          title={expanded ? "Collapse" : "Expand"}
+        >
+          {expanded ? "▲ Less" : "▼ More"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── NEW: Modal that lists every file that failed to load ────────────────────
 function ErrorReportModal({ failures, onClose }) {
   if (!failures || failures.length === 0) return null;
   return (
@@ -93,9 +122,9 @@ function ErrorReportModal({ failures, onClose }) {
   );
 }
 
+// ── FileCard ────────────────────────────────────────────────────────────────
 function FileCard({ file, index, onUpdateMeta, onRemoveFile, saving }) {
   const [expanded, setExpanded] = useState(false);
-  const [techExpanded, setTechExpanded] = useState(false); // NEW: track tech section expansion
   const isVideo = file.type === "video";
   const meta    = file.meta;
 
@@ -106,10 +135,6 @@ function FileCard({ file, index, onUpdateMeta, onRemoveFile, saving }) {
   const techEntries = Object.entries(meta).filter(
     ([k]) => !isEditable(k) && !k.startsWith("_") && k !== "Error"
   );
-
-  // NEW: Show only first 3 tech entries unless expanded
-  const visibleTechEntries = techExpanded ? techEntries : techEntries.slice(0, 3);
-  const hasMoreTech = techEntries.length > 3;
 
   function DateSourceBadge({ fieldKey }) {
     const src =
@@ -195,24 +220,13 @@ function FileCard({ file, index, onUpdateMeta, onRemoveFile, saving }) {
                 <>
                   <div style={S.sectionLabel}>🔧 Technical / Read-Only</div>
                   <div style={{ ...S.grid, opacity: 0.5 }}>
-                    {visibleTechEntries.map(([key, val]) => (
+                    {techEntries.map(([key, val]) => (
                       <div key={key} style={S.field}>
                         <label style={S.label}>{key}</label>
-                        <div style={S.readonly}>{val}</div>
+                        <CollapsibleReadonly value={val} />
                       </div>
                     ))}
                   </div>
-                  {hasMoreTech && (
-                    <button
-                      style={S.techExpandBtn}
-                      onClick={() => setTechExpanded(!techExpanded)}
-                    >
-                      {techExpanded
-                        ? `▲ Show less (${techEntries.length - 3} hidden)`
-                        : `▼ Show ${techEntries.length - 3} more technical fields`
-                      }
-                    </button>
-                  )}
                 </>
               )}
             </>
@@ -223,6 +237,7 @@ function FileCard({ file, index, onUpdateMeta, onRemoveFile, saving }) {
   );
 }
 
+// ── Main App ────────────────────────────────────────────────────────────────
 export default function App() {
   const [files, setFiles] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -726,6 +741,7 @@ export default function App() {
   );
 }
 
+// ── Styles ──────────────────────────────────────────────────────────────────
 const S = {
   page: {
     minHeight: "100vh",
@@ -814,12 +830,37 @@ const S = {
   field: { display: "flex", flexDirection: "column" },
   label: { fontSize: 11, fontWeight: 600, color: "#475569", marginBottom: 4, display: "flex", alignItems: "center", gap: 5, overflow: "hidden", whiteSpace: "nowrap" },
   input: { padding: "8px 11px", borderRadius: 7, border: "1px solid #1e293b", background: "#070b16", color: "#c7d2fe", fontSize: 13, outline: "none" },
-  readonly: {
-    padding: "8px 11px", borderRadius: 7,
-    background: "rgba(30,41,59,0.5)", color: "#64748b",
-    fontSize: 11, wordBreak: "break-all",
-    border: "1px solid #1e293b", fontFamily: "monospace", lineHeight: 1.4,
+  
+  // ── NEW: Collapsible readonly styles ───────────────────────────────────
+  readonlyWrap: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
   },
+  readonly: {
+    padding: "8px 11px",
+    borderRadius: 7,
+    background: "rgba(30,41,59,0.5)",
+    color: "#64748b",
+    fontSize: 11,
+    wordBreak: "break-all",
+    border: "1px solid #1e293b",
+    fontFamily: "monospace",
+    lineHeight: 1.4,
+    transition: "max-height 0.2s ease",
+  },
+  expandBtn: {
+    background: "none",
+    border: "none",
+    color: "#818cf8",
+    fontSize: 10,
+    fontWeight: 600,
+    cursor: "pointer",
+    padding: "2px 0",
+    textAlign: "left",
+    alignSelf: "flex-start",
+  },
+  
   badge: {
     exif:   { fontSize: 9, fontWeight: 700, color: "#818cf8", background: "rgba(129,140,248,0.12)", border: "1px solid rgba(129,140,248,0.25)", borderRadius: 4, padding: "1px 5px", flexShrink: 0 },
     os:     { fontSize: 9, fontWeight: 700, color: "#22c55e", background: "rgba(34,197,94,0.1)",    border: "1px solid rgba(34,197,94,0.2)",    borderRadius: 4, padding: "1px 5px", flexShrink: 0 },
@@ -827,20 +868,6 @@ const S = {
   },
   empty:  { textAlign: "center", padding: "70px 20px" },
   footer: { marginTop: 60, textAlign: "center", color: "#1e293b", fontSize: 11, letterSpacing: "0.04em" },
-
-  // NEW: Technical section expand button
-  techExpandBtn: {
-    marginTop: 12,
-    padding: "8px 16px",
-    background: "rgba(129,140,248,0.08)",
-    border: "1px solid rgba(129,140,248,0.2)",
-    borderRadius: 8,
-    color: "#818cf8",
-    fontSize: 12,
-    fontWeight: 600,
-    cursor: "pointer",
-    transition: "all 0.2s",
-  },
 
   modalBackdrop: {
     position: "fixed", inset: 0, zIndex: 100,
