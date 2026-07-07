@@ -1,50 +1,31 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // App.jsx  –  Metadata Studio frontend
-//
-// What this file does 
-//   • Shows a drag-and-drop zone to pick image/video files
-//   • Sends each file to the local backend (main.py) to read its metadata
-//   • Displays the metadata in editable fields
-//   • On "Save All" → sends edited metadata back to backend → writes to disk
-//   • On "Strip All" → removes all metadata from every file
-//
-
 // ─────────────────────────────────────────────────────────────────────────────
-
 import { useState, useCallback, useRef } from "react";
 import axios from "axios";
 
-// The backend URL — running locally on your machine
 const API = "/api";
 
-// Which fields are always shown in the "Editable" section
 const ALWAYS_EDITABLE = [
   "Make", "Model", "Software", "Artist", "Copyright", "ImageDescription",
   "Orientation", "Date Modified", "Date Taken", "Date Created",
   "GPSInfo", "XPTitle", "XPComment", "XPAuthor", "XPKeywords",
 ];
-
-// These prefixes mean the field is technical/read-only (e.g. "Video_codec")
 const READONLY_PREFIXES = ["General_", "Video_", "Audio_", "Other_", "PNG_iCC"];
-
-// The three date fields — always shown at the top, even if empty
 const DATE_FIELDS = ["Date Modified", "Date Created", "Date Taken"];
 
-// Is a metadata key editable by the user?
 function isEditable(key) {
-  if (key.startsWith("_")) return false; // internal flag, hide completely
+  if (key.startsWith("_")) return false;
   if (ALWAYS_EDITABLE.includes(key)) return true;
   if (READONLY_PREFIXES.some(p => key.startsWith(p))) return false;
   return true;
 }
 
-// Does this browser support the File System Access API (Chrome/Edge desktop)?
 function canEditInPlace() {
   const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   return !isMobile && !!window.showOpenFilePicker;
 }
 
-// Collect all files recursively from a dropped/selected folder
 async function collectFilesFromDir(dirHandle, prefix = "") {
   const results = [];
   for await (const [name, handle] of dirHandle.entries()) {
@@ -59,9 +40,6 @@ async function collectFilesFromDir(dirHandle, prefix = "") {
   return results;
 }
 
-// ── Small reusable components ─────────────────────────────────────────────────
-
-// Coloured label chip (e.g. "IMAGE", "saving…")
 function Tag({ label, color = "#7dd3fc" }) {
   return (
     <span style={{ ...S.tag, color, borderColor: color + "44" }}>
@@ -70,7 +48,6 @@ function Tag({ label, color = "#7dd3fc" }) {
   );
 }
 
-// Progress bar shown during batch operations
 function ProgressBar({ done, total }) {
   const pct = total ? Math.round((done / total) * 100) : 0;
   return (
@@ -81,14 +58,47 @@ function ProgressBar({ done, total }) {
   );
 }
 
-// ── FileCard: shows one file's metadata in an expandable card ─────────────────
+function ErrorReportModal({ failures, onClose }) {
+  if (!failures || failures.length === 0) return null;
+  return (
+    <div style={S.modalBackdrop} onClick={onClose}>
+      <div style={S.modalCard} onClick={e => e.stopPropagation()}>
+        <div style={S.modalHeader}>
+          <div style={{ fontSize: 22 }}>⚠️</div>
+          <div>
+            <div style={S.modalTitle}>
+              {failures.length} file{failures.length !== 1 ? "s" : ""} failed to load
+            </div>
+            <div style={S.modalSub}>
+              The rest were loaded successfully. Details below:
+            </div>
+          </div>
+          <button style={S.modalClose} onClick={onClose}>✕</button>
+        </div>
+        <div style={S.modalBody}>
+          {failures.map((f, i) => (
+            <div key={i} style={S.failRow}>
+              <div style={S.failName} title={f.filename}>{f.filename}</div>
+              <div style={S.failErr}>{f.error}</div>
+            </div>
+          ))}
+        </div>
+        <div style={S.modalFooter}>
+          <button style={{ ...S.btn, ...S.btnIndigo }} onClick={onClose}>
+            Got it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function FileCard({ file, index, onUpdateMeta, onRemoveFile, saving }) {
   const [expanded, setExpanded] = useState(false);
+  const [techExpanded, setTechExpanded] = useState(false); // NEW: track tech section expansion
   const isVideo = file.type === "video";
   const meta    = file.meta;
 
-  // Split metadata into three groups
   const dateEntries     = DATE_FIELDS.map(k => [k, meta[k] ?? ""]);
   const editableEntries = Object.entries(meta).filter(
     ([k]) => isEditable(k) && !DATE_FIELDS.includes(k) && k !== "Error"
@@ -97,13 +107,15 @@ function FileCard({ file, index, onUpdateMeta, onRemoveFile, saving }) {
     ([k]) => !isEditable(k) && !k.startsWith("_") && k !== "Error"
   );
 
-  // Badge shown next to each date field explaining where the value came from
+  // NEW: Show only first 3 tech entries unless expanded
+  const visibleTechEntries = techExpanded ? techEntries : techEntries.slice(0, 3);
+  const hasMoreTech = techEntries.length > 3;
+
   function DateSourceBadge({ fieldKey }) {
     const src =
       fieldKey === "Date Modified" ? file.dateModifiedSource :
       fieldKey === "Date Taken"    ? file.dateTakenSource    :
                                      file.dateCreatedSource;
-
     if (src === "exif")   return <span style={S.badge.exif}   title="Read from inside the file's EXIF data">EXIF</span>;
     if (src === "os")     return <span style={S.badge.os}     title="Read from your OS filesystem">✓ OS</span>;
     return                       <span style={S.badge.manual} title="Not found — type a value to embed it">✎ manual</span>;
@@ -111,10 +123,7 @@ function FileCard({ file, index, onUpdateMeta, onRemoveFile, saving }) {
 
   return (
     <div style={{ ...S.fileCard, opacity: saving ? 0.65 : 1 }}>
-
-      {/* ── Card header (always visible) ── */}
       <div style={S.fileHeader}>
-        {/* File type icon */}
         <div style={{
           ...S.fileIconWrap,
           background: isVideo
@@ -123,8 +132,6 @@ function FileCard({ file, index, onUpdateMeta, onRemoveFile, saving }) {
         }}>
           {isVideo ? "🎬" : "🖼️"}
         </div>
-
-        {/* Filename + tags — clicking expands the card */}
         <div style={{ flex: 1, minWidth: 0 }} onClick={() => setExpanded(v => !v)}>
           <div style={S.fileName} title={file.displayName}>{file.displayName}</div>
           <div style={S.fileTags}>
@@ -135,31 +142,20 @@ function FileCard({ file, index, onUpdateMeta, onRemoveFile, saving }) {
             {saving      && <Tag label="saving…" color="#f59e0b" />}
           </div>
         </div>
-
-        {/* Remove this file from the list */}
         <button style={S.removeBtn} onClick={e => { e.stopPropagation(); onRemoveFile(index); }}>✕</button>
-
-        {/* Expand/collapse arrow */}
         <div style={S.chevron} onClick={() => setExpanded(v => !v)}>
           {expanded ? "▲" : "▼"}
         </div>
       </div>
-
-      {/* ── Expanded body ── */}
       {expanded && (
         <div style={S.cardBody}>
-
-          {/* Saving overlay */}
           {saving && <div style={S.savingOverlay}>⟳ Saving…</div>}
-
-          {/* Error state */}
           {meta.Error ? (
             <div style={{ color: "#ef4444", padding: 20, textAlign: "center" }}>
               ❌ {meta.Error}
             </div>
           ) : (
             <>
-              {/* ── Date fields ── */}
               <div style={S.sectionLabel}>📅 Dates</div>
               <div style={{ ...S.grid, marginBottom: 20 }}>
                 {dateEntries.map(([key, val]) => (
@@ -177,8 +173,6 @@ function FileCard({ file, index, onUpdateMeta, onRemoveFile, saving }) {
                   </div>
                 ))}
               </div>
-
-              {/* ── Other editable fields (camera info, artist, etc.) ── */}
               {editableEntries.length > 0 && (
                 <>
                   <div style={S.sectionLabel}>✏️ Editable Metadata</div>
@@ -197,19 +191,28 @@ function FileCard({ file, index, onUpdateMeta, onRemoveFile, saving }) {
                   </div>
                 </>
               )}
-
-              {/* ── Technical read-only fields (codec info, resolution, etc.) ── */}
               {techEntries.length > 0 && (
                 <>
                   <div style={S.sectionLabel}>🔧 Technical / Read-Only</div>
                   <div style={{ ...S.grid, opacity: 0.5 }}>
-                    {techEntries.map(([key, val]) => (
+                    {visibleTechEntries.map(([key, val]) => (
                       <div key={key} style={S.field}>
                         <label style={S.label}>{key}</label>
                         <div style={S.readonly}>{val}</div>
                       </div>
                     ))}
                   </div>
+                  {hasMoreTech && (
+                    <button
+                      style={S.techExpandBtn}
+                      onClick={() => setTechExpanded(!techExpanded)}
+                    >
+                      {techExpanded
+                        ? `▲ Show less (${techEntries.length - 3} hidden)`
+                        : `▼ Show ${techEntries.length - 3} more technical fields`
+                      }
+                    </button>
+                  )}
                 </>
               )}
             </>
@@ -220,54 +223,35 @@ function FileCard({ file, index, onUpdateMeta, onRemoveFile, saving }) {
   );
 }
 
-// ── Main App component ────────────────────────────────────────────────────────
-
 export default function App() {
-  // State: list of loaded files
   const [files, setFiles] = useState([]);
-
-  // State: true while any batch operation is running (blocks buttons)
   const [busy, setBusy] = useState(false);
-
-  // State: set of file indexes currently being saved individually
   const [savingIdx, setSavingIdx] = useState(new Set());
-
-  // State: toast notification at the top { msg, type }
   const [toast, setToast] = useState(null);
-
-  // State: progress bar { done, total }
   const [progress, setProgress] = useState(null);
-
-  // State: is the user dragging a file over the drop zone?
   const [dragOver, setDragOver] = useState(false);
+  const [failures, setFailures] = useState(null);
 
-  const dropRef    = useRef(null);   // ref to the drop zone div
-  const toastTimer = useRef(null);   // ref to auto-dismiss timer
+  const dropRef    = useRef(null);
+  const toastTimer = useRef(null);
 
-  // Are we on Chrome/Edge desktop where we can edit files in-place?
   const inPlace = canEditInPlace();
 
-  // ── Show a toast notification ──────────────────────────────────────────────
   function showToast(msg, type = "info", duration = 4000) {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast({ msg, type });
     if (duration) toastTimer.current = setTimeout(() => setToast(null), duration);
   }
 
-  // ── Send one file to /read and get back its metadata ──────────────────────
   async function readFileObject(file) {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("original_last_modified", file.lastModified.toString());
-
     const res  = await axios.post(`${API}/read`, formData);
     const meta = { ...res.data.metadata };
-
-    // Always ensure the three date keys exist (even if empty string)
     if (!("Date Created"  in meta)) meta["Date Created"]  = "";
     if (!("Date Taken"    in meta)) meta["Date Taken"]    = "";
     if (!("Date Modified" in meta)) meta["Date Modified"] = "";
-
     return {
       name:               file.name || "unknown",
       displayName:        file.name || "unknown",
@@ -277,51 +261,57 @@ export default function App() {
       dateModifiedSource: res.data.date_modified_source || "unknown",
       dateTakenSource:    res.data.date_taken_source    || "unknown",
       dateCreatedSource:  res.data.date_created_source  || "unknown",
-      _rawFile:           file,  // kept for mobile download mode
+      _rawFile:           file,
+      _error:             res.data.error || (meta.Error ? meta.Error : null),
     };
   }
 
-  // ── Read a FileSystemFileHandle (desktop in-place mode) ───────────────────
   async function readHandle(handle, displayName) {
     const file   = await handle.getFile();
     const result = await readFileObject(file);
     return { ...result, handle, displayName: displayName || file.name };
   }
 
-  // ── Load a batch of FileSystemFileHandle entries ──────────────────────────
   async function loadHandles(entries) {
     if (!entries.length) return;
     setBusy(true);
     setProgress({ done: 0, total: entries.length });
     showToast(`Reading ${entries.length} file(s)…`, "info", 0);
 
-    const loaded = [];
-    let failed = 0;
-
+    const loaded   = [];
+    const failed   = [];
     for (let i = 0; i < entries.length; i++) {
       try {
         const result = await readHandle(entries[i].handle, entries[i].displayName);
-        if (result) loaded.push(result);
+        if (result._error) {
+          failed.push({ filename: result.displayName, error: result._error });
+        } else {
+          loaded.push(result);
+        }
       } catch (e) {
-        console.error(e);
-        failed++;
+        failed.push({
+          filename: entries[i].displayName,
+          error: e.response?.data?.detail || e.message || "Unknown error",
+        });
       }
       setProgress({ done: i + 1, total: entries.length });
     }
 
-    // Append to existing list (don't replace)
     setFiles(prev => [...prev, ...loaded]);
     setProgress(null);
     setBusy(false);
-    showToast(
-      loaded.length
-        ? `✅ Added ${loaded.length} file(s)${failed ? ` · ${failed} failed` : ""}`
-        : "No supported files found.",
-      loaded.length ? "success" : "warn"
-    );
+
+    if (loaded.length) {
+      showToast(`✅ Added ${loaded.length} file(s)`, "success");
+    }
+    if (failed.length) {
+      setFailures(failed);
+      showToast(`⚠️ ${failed.length} file(s) failed — see details`, "error", 6000);
+    } else if (!loaded.length) {
+      showToast("No supported files found.", "warn");
+    }
   }
 
-  // ── Load files from a plain <input type="file"> (mobile fallback) ─────────
   async function loadMobileFiles(fileList) {
     if (!fileList || fileList.length === 0) return;
     const arr = Array.from(fileList);
@@ -330,16 +320,20 @@ export default function App() {
     showToast(`Reading ${arr.length} file(s)…`, "info", 0);
 
     const loaded = [];
-    let failed = 0, lastError = "";
-
+    const failed = [];
     for (let i = 0; i < arr.length; i++) {
       try {
         const result = await readFileObject(arr[i]);
-        if (result.meta?.Error) { failed++; lastError = result.meta.Error; }
-        else loaded.push(result);
+        if (result._error) {
+          failed.push({ filename: arr[i].name, error: result._error });
+        } else {
+          loaded.push(result);
+        }
       } catch (e) {
-        failed++;
-        lastError = e.message || "Unknown error";
+        failed.push({
+          filename: arr[i].name,
+          error: e.response?.data?.detail || e.message || "Unknown error",
+        });
       }
       setProgress({ done: i + 1, total: arr.length });
     }
@@ -348,14 +342,17 @@ export default function App() {
     setProgress(null);
     setBusy(false);
 
-    if (loaded.length === 0) {
-      showToast(`❌ Failed: ${lastError}`, "error", 8000);
-    } else {
-      showToast(`✅ Added ${loaded.length} file(s)${failed ? ` · ${failed} failed` : ""}`, "success");
+    if (loaded.length) {
+      showToast(`✅ Added ${loaded.length} file(s)`, "success");
+    }
+    if (failed.length) {
+      setFailures(failed);
+      showToast(`⚠️ ${failed.length} file(s) failed — see details`, "error", 6000);
+    } else if (!loaded.length) {
+      showToast("No supported files found.", "warn");
     }
   }
 
-  // ── File picker button (desktop) ───────────────────────────────────────────
   async function handleSelectFiles() {
     try {
       const handles = await window.showOpenFilePicker({ multiple: true });
@@ -365,7 +362,6 @@ export default function App() {
     }
   }
 
-  // ── Folder picker button (desktop) ────────────────────────────────────────
   async function handleSelectFolder() {
     try {
       const dir     = await window.showDirectoryPicker({ mode: "readwrite" });
@@ -378,15 +374,12 @@ export default function App() {
     }
   }
 
-  // ── Drag & drop handlers ───────────────────────────────────────────────────
   function handleDragOver(e)  { e.preventDefault(); e.stopPropagation(); setDragOver(true); }
   function handleDragLeave(e) { if (!dropRef.current?.contains(e.relatedTarget)) setDragOver(false); }
-
   async function handleDrop(e) {
     e.preventDefault(); e.stopPropagation(); setDragOver(false);
     const items   = [...e.dataTransfer.items];
     const entries = [];
-
     for (const item of items) {
       if (item.kind !== "file") continue;
       try {
@@ -397,12 +390,11 @@ export default function App() {
           const sub = await collectFilesFromDir(h, h.name);
           entries.push(...sub);
         }
-      } catch { /* browser doesn't support getAsFileSystemHandle */ }
+      } catch { /* fallback */ }
     }
     if (entries.length) await loadHandles(entries);
   }
 
-  // ── Update one metadata field in state ────────────────────────────────────
   const updateMeta = useCallback((index, key, value) => {
     setFiles(prev => {
       const next    = [...prev];
@@ -411,15 +403,13 @@ export default function App() {
     });
   }, []);
 
-  // ── Remove one file from the list ─────────────────────────────────────────
   const removeFile = useCallback(index => {
     setFiles(prev => prev.filter((_, i) => i !== index));
   }, []);
 
-  // ── Re-read a file from disk after saving (so UI shows fresh values) ──────
   async function rereadAfterSave(file, index) {
     try {
-      await new Promise(r => setTimeout(r, 200)); // wait for OS flush
+      await new Promise(r => setTimeout(r, 200));
       const freshFile = await file.handle.getFile();
       const readForm  = new FormData();
       readForm.append("file", freshFile);
@@ -429,7 +419,6 @@ export default function App() {
       if (!("Date Created"  in freshMeta)) freshMeta["Date Created"]  = "";
       if (!("Date Taken"    in freshMeta)) freshMeta["Date Taken"]    = "";
       if (!("Date Modified" in freshMeta)) freshMeta["Date Modified"] = "";
-
       setFiles(prev => {
         const next = [...prev];
         next[index] = {
@@ -442,39 +431,29 @@ export default function App() {
         };
         return next;
       });
-    } catch { /* non-critical — UI just keeps old values */ }
+    } catch { /* non-critical */ }
   }
 
-  // ── Save one file ─────────────────────────────────────────────────────────
   async function saveFile(file, index) {
     setSavingIdx(s => new Set(s).add(index));
     try {
       const formData = new FormData();
-
       if (inPlace && file.handle) {
-        // Desktop: get the current file bytes from the handle
         const orig = await file.handle.getFile();
         formData.append("file", orig);
         formData.append("original_last_modified", orig.lastModified.toString());
       } else {
-        // Mobile: use the raw File object captured at load time
         formData.append("file", file._rawFile);
         formData.append("original_last_modified", (file._rawFile.lastModified || Date.now()).toString());
       }
-
       formData.append("metadata", JSON.stringify(file.meta));
-
       const res = await axios.post(`${API}/save`, formData, { responseType: "blob" });
-
       if (inPlace && file.handle) {
-        // Desktop: write the modified bytes back to the original file on disk
         const writable = await file.handle.createWritable();
         await writable.write(res.data);
         await writable.close();
-        // Re-read to sync the UI with what's actually on disk
         await rereadAfterSave(file, index);
       } else {
-        // Mobile: trigger a download of the modified file
         const url  = window.URL.createObjectURL(new Blob([res.data]));
         const link = document.createElement("a");
         link.href  = url;
@@ -484,35 +463,30 @@ export default function App() {
         link.remove();
         window.URL.revokeObjectURL(url);
       }
-
-      return null; // null = success
+      return null;
     } catch (e) {
       let msg = e.message || "Unknown error";
       if (e.response?.data) {
         try { msg = JSON.parse(await e.response.data.text()).detail || msg; } catch {}
       }
-      return msg; // return error string
+      return msg;
     } finally {
       setSavingIdx(s => { const n = new Set(s); n.delete(index); return n; });
     }
   }
 
-  // ── Save all files ────────────────────────────────────────────────────────
   async function handleSaveAll() {
     setBusy(true);
     setProgress({ done: 0, total: files.length });
     showToast("Saving…", "info", 0);
     const errors = [];
-
     for (let i = 0; i < files.length; i++) {
       const err = await saveFile(files[i], i);
       if (err) errors.push(`${files[i].displayName}: ${err}`);
       setProgress({ done: i + 1, total: files.length });
     }
-
     setProgress(null);
     setBusy(false);
-
     if (errors.length) {
       showToast(`❌ ${errors.length} file(s) failed.`, "error");
       alert(errors.join("\n"));
@@ -524,19 +498,16 @@ export default function App() {
     }
   }
 
-  // ── Strip metadata from all files ─────────────────────────────────────────
   async function handleStripAll() {
     if (!window.confirm(`Strip ALL metadata from ${files.length} file(s)? This cannot be undone.`)) return;
     setBusy(true);
     setProgress({ done: 0, total: files.length });
     showToast("Stripping…", "info", 0);
     const errors = [];
-
     for (let i = 0; i < files.length; i++) {
       setSavingIdx(s => new Set(s).add(i));
       try {
         const formData = new FormData();
-
         if (inPlace && files[i].handle) {
           const orig = await files[i].handle.getFile();
           formData.append("file", orig);
@@ -545,9 +516,7 @@ export default function App() {
           formData.append("file", files[i]._rawFile);
           formData.append("original_last_modified", (files[i]._rawFile.lastModified || Date.now()).toString());
         }
-
         const res = await axios.post(`${API}/remove`, formData, { responseType: "blob" });
-
         if (inPlace && files[i].handle) {
           const writable = await files[i].handle.createWritable();
           await writable.write(res.data);
@@ -570,27 +539,63 @@ export default function App() {
       }
       setProgress({ done: i + 1, total: files.length });
     }
-
     setProgress(null);
     setBusy(false);
-
     if (errors.length) showToast(`❌ Failed: ${errors.join(", ")}`, "error");
     else showToast(`🧹 Stripped ${files.length} file(s).`, "success");
   }
 
-  // Toast colour map
+  async function handleExportReport(format = "csv") {
+    if (files.length === 0) {
+      showToast("No files loaded to export.", "warn");
+      return;
+    }
+    setBusy(true);
+    showToast(`Generating ${format.toUpperCase()} report for ${files.length} file(s)…`, "info", 0);
+    try {
+      const formData = new FormData();
+      for (const f of files) {
+        const blob = inPlace && f.handle
+          ? await f.handle.getFile()
+          : f._rawFile;
+        formData.append("files", blob, f.displayName || f.name);
+      }
+      formData.append("format", format);
+      const res = await axios.post(`${API}/batch_read_report`, formData);
+      const dl = await axios.get(`${API}/download_report/${res.data.report}`, {
+        responseType: "blob",
+      });
+      const url  = window.URL.createObjectURL(new Blob([dl.data]));
+      const link = document.createElement("a");
+      link.href  = url;
+      link.setAttribute("download", res.data.report);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      if (res.data.failed > 0) {
+        setFailures(res.data.failures);
+        showToast(
+          `📄 Report saved (${res.data.ok} ok, ${res.data.failed} failed)`,
+          "warn", 6000
+        );
+      } else {
+        showToast(`📄 Report saved — ${res.data.ok} file(s)`, "success");
+      }
+    } catch (e) {
+      showToast(`❌ Report failed: ${e.response?.data?.detail || e.message}`, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const TOAST_COLOR = { info: "#3b82f6", success: "#22c55e", error: "#ef4444", warn: "#f59e0b" };
 
-  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div style={S.page}>
-      {/* Decorative background gradients */}
       <div style={S.bg} />
-
-      {/* Main content — full width with generous padding */}
       <div style={S.container}>
-
-        {/* ── Header ── */}
         <header style={S.header}>
           <div style={S.logo}>META</div>
           <div>
@@ -603,7 +608,6 @@ export default function App() {
           </div>
         </header>
 
-        {/* ── Drop zone (desktop) or file picker (mobile) ── */}
         {inPlace ? (
           <div
             ref={dropRef}
@@ -619,7 +623,7 @@ export default function App() {
           >
             <div style={S.dropIcon}>{dragOver ? "📂" : "⊕"}</div>
             <div style={S.dropTitle}>{dragOver ? "Drop to add files" : "Drag & drop files or folders here"}</div>
-            <div style={S.dropHint}>JPG · PNG · WEBP · MP4 · MOV · MKV · AVI · and more</div>
+            <div style={S.dropHint}>JPG · PNG · WEBP · MP4 · MOV · MKV · AVI · HEIC* · and more</div>
             <div style={S.dropBtns}>
               <button style={{ ...S.dropBtn, ...S.btnIndigo }} onClick={handleSelectFiles} disabled={busy}>
                 📄 Select Files
@@ -630,7 +634,6 @@ export default function App() {
             </div>
           </div>
         ) : (
-          /* Mobile: plain file input buttons */
           <div style={S.mobileZone}>
             <div style={{ fontSize: 40, marginBottom: 10 }}>📱</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: "#e2e8f0", marginBottom: 6 }}>Mobile Mode</div>
@@ -653,7 +656,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ── Toast notification ── */}
         {toast && (
           <div style={{
             ...S.notice,
@@ -665,10 +667,8 @@ export default function App() {
           </div>
         )}
 
-        {/* ── Progress bar ── */}
         {progress && <ProgressBar done={progress.done} total={progress.total} />}
 
-        {/* ── Stats + action buttons ── */}
         {files.length > 0 && (
           <div style={S.actionRow}>
             <div style={S.statsChip}>
@@ -683,6 +683,12 @@ export default function App() {
               <button style={{ ...S.btn, ...S.btnRed }} onClick={handleStripAll} disabled={busy}>
                 🧹 {inPlace ? "Strip All" : "Strip & Download All"}
               </button>
+              <button style={{ ...S.btn, ...S.btnGhost }} onClick={() => handleExportReport("csv")} disabled={busy}>
+                📄 Export CSV
+              </button>
+              <button style={{ ...S.btn, ...S.btnGhost }} onClick={() => handleExportReport("txt")} disabled={busy}>
+                📝 Export TXT
+              </button>
               <button style={{ ...S.btn, ...S.btnDark }} onClick={() => setFiles([])} disabled={busy}>
                 ✕ Clear All
               </button>
@@ -690,7 +696,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ── File cards ── */}
         <div style={S.fileList}>
           {files.map((file, i) => (
             <FileCard
@@ -704,7 +709,6 @@ export default function App() {
           ))}
         </div>
 
-        {/* ── Empty state ── */}
         {files.length === 0 && !busy && (
           <div style={S.empty}>
             <div style={{ fontSize: 52, marginBottom: 14 }}>🗂️</div>
@@ -716,16 +720,13 @@ export default function App() {
           {inPlace ? "Chrome & Edge Desktop · In-place editing · No internet required" : "Mobile Mode · Process & Download · No internet required"}
         </footer>
       </div>
+
+      <ErrorReportModal failures={failures} onClose={() => setFailures(null)} />
     </div>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
-// Uses plain JS objects (React inline styles).
-// No CSS files, no Tailwind — everything is here.
-
 const S = {
-  // Full-page wrapper
   page: {
     minHeight: "100vh",
     fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
@@ -734,8 +735,6 @@ const S = {
     position: "relative",
     overflowX: "hidden",
   },
-
-  // Decorative background (two soft radial gradients)
   bg: {
     position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0,
     background: [
@@ -743,16 +742,12 @@ const S = {
       "radial-gradient(ellipse 70% 40% at 90% 100%, #001830 0%, transparent 60%)",
     ].join(", "),
   },
-
-  // Content wrapper — full width with max-width cap and side padding
   container: {
     position: "relative", zIndex: 1,
     width: "100%",
     padding: "36px 48px 80px",
     boxSizing: "border-box",
   },
-
-  // Header row
   header: { display: "flex", alignItems: "center", gap: 18, marginBottom: 28 },
   logo: {
     background: "linear-gradient(135deg,#818cf8,#38bdf8)", color: "#fff",
@@ -765,8 +760,6 @@ const S = {
     WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
   },
   subtitle: { margin: "4px 0 0", fontSize: 13, color: "#475569" },
-
-  // Drop zone
   dropZone: {
     border: "2px dashed", borderRadius: 16,
     padding: "40px 32px 30px",
@@ -781,27 +774,19 @@ const S = {
   dropBtn:   { padding: "11px 26px", borderRadius: 9, fontWeight: 600, fontSize: 14, cursor: "pointer", border: "none" },
   btnIndigo: { background: "linear-gradient(135deg,#4f46e5,#818cf8)", color: "#fff" },
   btnGhost:  { background: "rgba(129,140,248,0.1)", color: "#818cf8", border: "1px solid #312e81" },
-
-  // Mobile zone
   mobileZone: {
     border: "2px solid #1e293b", borderRadius: 16,
     padding: "40px 32px 30px", textAlign: "center",
     marginBottom: 18, background: "rgba(10,6,30,0.6)",
   },
-
-  // Toast notification bar
   notice: {
     padding: "12px 18px", borderRadius: 10,
     border: "1px solid", marginBottom: 16,
     fontSize: 14, fontWeight: 500, lineHeight: 1.5,
   },
-
-  // Progress bar
   progressWrap:  { height: 6, background: "#0f172a", borderRadius: 99, marginBottom: 18, position: "relative", overflow: "visible" },
   progressFill:  { height: "100%", background: "linear-gradient(90deg,#4f46e5,#38bdf8)", borderRadius: 99, transition: "width 0.2s" },
   progressLabel: { position: "absolute", right: 0, top: 10, fontSize: 11, color: "#475569" },
-
-  // Action row (stats chip + buttons)
   actionRow:  { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 20, flexWrap: "wrap" },
   statsChip:  { fontSize: 13, color: "#475569", background: "#0a0e1a", border: "1px solid #1e293b", borderRadius: 8, padding: "7px 16px" },
   actionBtns: { display: "flex", gap: 8, flexWrap: "wrap" },
@@ -809,11 +794,7 @@ const S = {
   btnGreen:   { background: "linear-gradient(135deg,#166534,#22c55e)", color: "#fff" },
   btnRed:     { background: "linear-gradient(135deg,#7f1d1d,#ef4444)", color: "#fff" },
   btnDark:    { background: "#0f172a", color: "#64748b", border: "1px solid #1e293b" },
-
-  // File list
   fileList: { display: "flex", flexDirection: "column", gap: 10 },
-
-  // File card
   fileCard: {
     background: "rgba(8,5,20,0.85)", border: "1px solid #1e293b",
     borderRadius: 14, overflow: "hidden",
@@ -826,15 +807,9 @@ const S = {
   tag:          { fontSize: 10, fontWeight: 700, borderRadius: 5, padding: "2px 7px", letterSpacing: "0.05em", border: "1px solid", background: "transparent" },
   removeBtn:    { background: "none", border: "none", color: "#475569", fontSize: 15, cursor: "pointer", padding: "4px 9px", borderRadius: 6, flexShrink: 0 },
   chevron:      { color: "#475569", fontSize: 12, flexShrink: 0 },
-
-  // Card expanded body
   cardBody:     { padding: "18px 20px", borderTop: "1px solid #0f172a", position: "relative" },
   savingOverlay:{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.65)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 600, color: "#7dd3fc", zIndex: 2 },
-
-  // Section label inside card (e.g. "📅 DATES")
   sectionLabel: { fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: "#334155", textTransform: "uppercase", marginBottom: 10 },
-
-  // Metadata grid — responsive columns
   grid:  { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 },
   field: { display: "flex", flexDirection: "column" },
   label: { fontSize: 11, fontWeight: 600, color: "#475569", marginBottom: 4, display: "flex", alignItems: "center", gap: 5, overflow: "hidden", whiteSpace: "nowrap" },
@@ -845,17 +820,69 @@ const S = {
     fontSize: 11, wordBreak: "break-all",
     border: "1px solid #1e293b", fontFamily: "monospace", lineHeight: 1.4,
   },
-
-  // Date source badges
   badge: {
     exif:   { fontSize: 9, fontWeight: 700, color: "#818cf8", background: "rgba(129,140,248,0.12)", border: "1px solid rgba(129,140,248,0.25)", borderRadius: 4, padding: "1px 5px", flexShrink: 0 },
     os:     { fontSize: 9, fontWeight: 700, color: "#22c55e", background: "rgba(34,197,94,0.1)",    border: "1px solid rgba(34,197,94,0.2)",    borderRadius: 4, padding: "1px 5px", flexShrink: 0 },
     manual: { fontSize: 9, fontWeight: 700, color: "#f59e0b", background: "rgba(245,158,11,0.1)",   border: "1px solid rgba(245,158,11,0.2)",   borderRadius: 4, padding: "1px 5px", flexShrink: 0 },
   },
-
-  // Empty state
   empty:  { textAlign: "center", padding: "70px 20px" },
-
-  // Footer
   footer: { marginTop: 60, textAlign: "center", color: "#1e293b", fontSize: 11, letterSpacing: "0.04em" },
+
+  // NEW: Technical section expand button
+  techExpandBtn: {
+    marginTop: 12,
+    padding: "8px 16px",
+    background: "rgba(129,140,248,0.08)",
+    border: "1px solid rgba(129,140,248,0.2)",
+    borderRadius: 8,
+    color: "#818cf8",
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: "all 0.2s",
+  },
+
+  modalBackdrop: {
+    position: "fixed", inset: 0, zIndex: 100,
+    background: "rgba(0,0,0,0.7)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    padding: 20, backdropFilter: "blur(6px)",
+  },
+  modalCard: {
+    background: "#0b0d1a", border: "1px solid #1e293b",
+    borderRadius: 14, maxWidth: 640, width: "100%",
+    maxHeight: "80vh", display: "flex", flexDirection: "column",
+    boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+  },
+  modalHeader: {
+    display: "flex", alignItems: "flex-start", gap: 14,
+    padding: "18px 20px", borderBottom: "1px solid #1e293b",
+  },
+  modalTitle: { fontSize: 16, fontWeight: 700, color: "#f59e0b" },
+  modalSub:   { fontSize: 12, color: "#64748b", marginTop: 2 },
+  modalClose: {
+    marginLeft: "auto", background: "none", border: "none",
+    color: "#64748b", fontSize: 18, cursor: "pointer", padding: "2px 8px",
+  },
+  modalBody: {
+    padding: "12px 20px", overflowY: "auto", flex: 1,
+  },
+  failRow: {
+    padding: "10px 12px", borderRadius: 8,
+    background: "rgba(239,68,68,0.06)",
+    border: "1px solid rgba(239,68,68,0.2)",
+    marginBottom: 8,
+  },
+  failName: {
+    fontSize: 13, fontWeight: 600, color: "#e2e8f0",
+    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+  },
+  failErr: {
+    fontSize: 12, color: "#f87171", marginTop: 4,
+    fontFamily: "monospace", wordBreak: "break-word",
+  },
+  modalFooter: {
+    padding: "14px 20px", borderTop: "1px solid #1e293b",
+    display: "flex", justifyContent: "flex-end",
+  },
 };
